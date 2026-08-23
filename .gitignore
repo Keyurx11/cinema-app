@@ -8,8 +8,3 @@ local.properties
 Captures/
 .externalNativeBuild
 .cxx
-
-# Signing material - lives only in the SIGNING_KEYSTORE_B64 repo secret
-signing/
-*.jks
-*.keystore

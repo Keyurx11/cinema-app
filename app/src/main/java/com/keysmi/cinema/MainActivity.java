@@ -1,4 +1,4 @@
-package com.keysmi.cinema;
+﻿package com.keysmi.cinema;
 
 import android.app.Activity;
 import android.graphics.Color;
