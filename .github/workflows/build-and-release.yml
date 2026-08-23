@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: build-and-release
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Gradle Android TV Build
@@ -32,30 +36,64 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.2'
 
-      - name: Build APK with Gradle
+      - name: Build release APK with Gradle
+        run: gradle assembleRelease --stacktrace --no-daemon
+
+      - name: Sign APK with the persistent KeySmi key
         run: |
-          gradle assembleRelease --stacktrace
+          set -eo pipefail
+          BT="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -n 1)"
+          KS="$RUNNER_TEMP/keysmi-release.jks"
+          PW="keysmicinema"
+
+          # Signing key priority: repo secret (never committed) -> committed keystore -> generate once.
+          if [ -n "${{ secrets.SIGNING_KEYSTORE_B64 }}" ]; then
+            echo "Using SIGNING_KEYSTORE_B64 secret (key stays out of the repo)."
+            echo "${{ secrets.SIGNING_KEYSTORE_B64 }}" | base64 -d > "$KS"
+          elif [ -f signing/keysmi-release.jks ]; then
+            echo "Using committed signing/keysmi-release.jks."
+            cp signing/keysmi-release.jks "$KS"
+          else
+            echo "No signing key found - generating a permanent one (first run only)."
+            mkdir -p signing
+            keytool -genkeypair -v -keystore signing/keysmi-release.jks -alias keysmi \
+              -keyalg RSA -keysize 2048 -validity 36500 \
+              -storepass "$PW" -keypass "$PW" \
+              -dname "CN=KeySmi Cinema, O=KeySmi, C=GB"
+            cp signing/keysmi-release.jks "$KS"
+            echo "COMMIT_KEYSTORE=1" >> "$GITHUB_ENV"
+          fi
+
+          UNSIGNED="$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          echo "Gradle output: $UNSIGNED"
+          "$BT/zipalign" -f -v -p 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign --ks "$KS" --ks-pass pass:"$PW" --key-pass pass:"$PW" \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out keysmi-cinema.apk aligned.apk
+          "$BT/apksigner" verify --verbose keysmi-cinema.apk
           mkdir -p release_assets
-          cp app/build/outputs/apk/release/app-release.apk keysmi-cinema.apk
-          cp keysmi-cinema.apk release_assets/keysmi-cinema.apk
+          cp -f keysmi-cinema.apk release_assets/keysmi-cinema.apk
           ls -lh keysmi-cinema.apk
 
-      - name: Push Built APK Binary Directly to Main
+      - name: Commit APK (and keystore if newly generated) to main
         run: |
           git config user.name "Keyurx11"
           git config user.email "keyurx11@gmail.com"
-          export GIT_AUTHOR_DATE="2026-08-23T16:30:00 +0100"
-          export GIT_COMMITTER_DATE="2026-08-23T16:30:00 +0100"
+          export GIT_AUTHOR_DATE="2026-08-23T16:45:00 +0100"
+          export GIT_COMMITTER_DATE="2026-08-23T16:45:00 +0100"
           git add -f keysmi-cinema.apk release_assets/keysmi-cinema.apk
+          if [ "$COMMIT_KEYSTORE" = "1" ] && [ -f signing/keysmi-release.jks ]; then
+            git add -f signing/keysmi-release.jks
+          fi
           if git diff --staged --quiet; then
-            echo "No APK changes to commit."
+            echo "Nothing changed - skipping commit."
             exit 0
           fi
-          git commit -m "build: publish keysmi-cinema.apk v2.2.1 [skip ci]" --date="2026-08-23T16:30:00 +0100"
+          git commit -m "build: publish keysmi-cinema.apk v2.2.1 with custom 16:9 banner [skip ci]" --date="2026-08-23T16:45:00 +0100"
           git push origin main
 
       - name: Create or Update GitHub Release

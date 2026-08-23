@@ -8,14 +8,14 @@ android {
         applicationId "com.keysmi.cinema"
         minSdkVersion 21
         targetSdkVersion 34
-        versionCode 220
-        versionName "2.2.0"
+        versionCode 221
+        versionName "2.2.1"
     }
 
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            // Release APK is signed in CI with the persistent KeySmi keystore.
         }
         debug {
             signingConfig signingConfigs.debug
@@ -34,6 +34,6 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'androidx.core:core:1.12.0'
+    // No androidx / support-library dependencies: MainActivity extends the
+    // framework Activity and the theme is a framework theme. Keeps the APK tiny.
 }
