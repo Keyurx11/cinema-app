@@ -1,4 +1,4 @@
-﻿name: Build & Release Android TV APK
+name: Build & Release Android TV APK
 
 on:
   push:
@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: write
+
+concurrency:
+  group: build-and-release
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -30,6 +34,37 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Provision signing keystore
+        id: keystore
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+        run: |
+          set -e
+          mkdir -p signing
+          if [ -n "$SIGNING_KEYSTORE_B64" ]; then
+            echo "Using keystore from repository secret SIGNING_KEYSTORE_B64."
+            echo "$SIGNING_KEYSTORE_B64" | base64 -d > signing/keysmi-release.jks
+            echo "bootstrap=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No SIGNING_KEYSTORE_B64 secret set - generating a TEMPORARY keystore for this build."
+            echo "::warning::Download the 'signing-keystore-ADD-AS-SECRET' artifact from this run, then add its"
+            echo "::warning::base64 as a repo secret named SIGNING_KEYSTORE_B64 so every future build reuses it."
+            keytool -genkeypair -v -keystore signing/keysmi-release.jks -alias keysmi \
+              -keyalg RSA -keysize 2048 -validity 36500 \
+              -storepass keysmicinema -keypass keysmicinema \
+              -dname "CN=KeySmi Cinema, O=KeySmi, C=GB"
+            base64 -w0 signing/keysmi-release.jks > signing/keysmi-release.jks.b64
+            echo "bootstrap=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload keystore for one-time secret capture
+        if: steps.keystore.outputs.bootstrap == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signing-keystore-ADD-AS-SECRET
+          path: signing/keysmi-release.jks.b64
+          retention-days: 1
 
       - name: Compile and Assemble APK
         run: |
@@ -76,12 +111,13 @@ jobs:
           ls -la build/classes.dex
           cd build
           zip -u unaligned.apk classes.dex
-          
-          echo "6. Aligning and Signing APK..."
+
+          echo "6. Aligning APK..."
           zipalign -v -p 4 unaligned.apk aligned.apk
 
-          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
+          echo "7. Signing APK (v1 + v2 + v3) with the persistent key..."
+          KEYSTORE="$GITHUB_WORKSPACE/signing/keysmi-release.jks"
+          apksigner sign --ks "$KEYSTORE" --ks-pass pass:keysmicinema --key-pass pass:keysmicinema \
             --v1-signing-enabled true \
             --v2-signing-enabled true \
             --v3-signing-enabled true \
@@ -91,14 +127,19 @@ jobs:
           cp -f keysmi-cinema.apk release_assets/keysmi-cinema.apk
           ls -lh keysmi-cinema.apk
 
-      - name: Push Built APK Binary Directly to Main
+      - name: Push Built APK to Main
         run: |
-          git config --global user.name "Keyurx11"
-          git config --global user.email "keyurx11@gmail.com"
-          export GIT_AUTHOR_DATE="2026-08-23T15:00:00 +0100"
-          export GIT_COMMITTER_DATE="2026-08-23T15:00:00 +0100"
+          git config user.name "Keyurx11"
+          git config user.email "keyurx11@gmail.com"
+          export GIT_AUTHOR_DATE="2026-08-23T16:00:00 +0100"
+          export GIT_COMMITTER_DATE="2026-08-23T16:00:00 +0100"
+          # signing/ is git-ignored - the keystore is never committed
           git add -f keysmi-cinema.apk release_assets/keysmi-cinema.apk
-          git commit -m "build: publish keysmi-cinema.apk with LAN IP 192.168.68.116" --date="2026-08-23T15:00:00 +0100"
+          if git diff --staged --quiet; then
+            echo "Nothing changed - skipping commit."
+            exit 0
+          fi
+          git commit -m "build: publish keysmi-cinema.apk (stable signing key) [skip ci]" --date="2026-08-23T16:00:00 +0100"
           git push origin main
 
       - name: Create or Update GitHub Release
