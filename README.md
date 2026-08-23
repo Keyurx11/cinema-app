@@ -1,4 +1,4 @@
-﻿# KeySmi Cinema
+# KeySmi Cinema
 
 ### 📺 FireStick / Android TV Installation
 
