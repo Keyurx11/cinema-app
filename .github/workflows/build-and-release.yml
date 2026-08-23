@@ -1,0 +1,114 @@
+﻿name: Build & Release Android TV APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Native Android Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Compile and Assemble APK
+        run: |
+          set -e
+          set -x
+
+          BUILD_TOOLS="$(find $ANDROID_SDK_ROOT/build-tools -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)"
+          ANDROID_JAR="$(find $ANDROID_SDK_ROOT/platforms -name "android.jar" | sort -V | tail -n 1)"
+          export PATH="$BUILD_TOOLS:$PATH"
+
+          mkdir -p build/gen build/bin build/res release_assets
+
+          echo "1. Compiling Android XML Resources..."
+          aapt2 compile app/src/main/res/values/values.xml -o build/res/
+          aapt2 compile app/src/main/res/drawable/ic_launcher.xml -o build/res/
+          aapt2 compile app/src/main/res/layout/activity_main.xml -o build/res/
+
+          echo "2. Linking Manifest and Resources..."
+          aapt2 link build/res/*.flat \
+            -I "$ANDROID_JAR" \
+            --manifest app/src/main/AndroidManifest.xml \
+            --java build/gen \
+            --min-sdk-version 21 \
+            --target-sdk-version 34 \
+            --version-code 220 \
+            --version-name "2.2.0" \
+            --auto-add-overlay \
+            -o build/unaligned.apk
+
+          echo "3. Compiling Java Source Files..."
+          javac -source 1.8 -target 1.8 \
+            -cp "$ANDROID_JAR" \
+            -d build/bin \
+            $(find build/gen -name "*.java") \
+            $(find app/src/main/java -name "*.java")
+
+          echo "4. Converting Java bytecode to Android DEX (classes.dex)..."
+          d8 $(find build/bin -name "*.class") \
+            --output build/ \
+            --lib "$ANDROID_JAR" \
+            --min-api 21
+
+          echo "5. Packing classes.dex into APK..."
+          ls -la build/classes.dex
+          cd build
+          zip -u unaligned.apk classes.dex
+          
+          echo "6. Aligning and Signing APK..."
+          zipalign -v -p 4 unaligned.apk aligned.apk
+
+          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out ../keysmi-cinema.apk aligned.apk
+          apksigner verify --verbose ../keysmi-cinema.apk
+          cd ..
+          cp -f keysmi-cinema.apk release_assets/keysmi-cinema.apk
+          ls -lh keysmi-cinema.apk
+
+      - name: Push Built APK Binary Directly to Main
+        run: |
+          git config --global user.name "Keyurx11"
+          git config --global user.email "keyurx11@gmail.com"
+          export GIT_AUTHOR_DATE="2026-08-23T15:00:00 +0100"
+          export GIT_COMMITTER_DATE="2026-08-23T15:00:00 +0100"
+          git add -f keysmi-cinema.apk release_assets/keysmi-cinema.apk
+          git commit -m "build: publish keysmi-cinema.apk with LAN IP 192.168.68.116" --date="2026-08-23T15:00:00 +0100"
+          git push origin main
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        continue-on-error: true
+        with:
+          tag_name: v2.2.0
+          name: KeySmi Cinema v2.2.0
+          draft: false
+          prerelease: false
+          files: release_assets/keysmi-cinema.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,39 @@
+﻿apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.keysmi.cinema'
+    compileSdkVersion 34
+
+    defaultConfig {
+        applicationId "com.keysmi.cinema"
+        minSdkVersion 21
+        targetSdkVersion 34
+        versionCode 220
+        versionName "2.2.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+    
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lintOptions {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core:1.12.0'
+}
